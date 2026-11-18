@@ -52,7 +52,7 @@ const hex=async t=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new T
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const samples={sqli:{path:"/login?id=1' OR '1'='1",cat:'SQL injection',sev:72,conf:55},
- xss:{path:'/search?q=<script>alert(1)</script>',cat:'XSS',sev:55,conf:70},
+ xss:{path:'/search?q=<script>alert(1)<\/script>',cat:'XSS',sev:55,conf:70},
  enum:{path:'/admin /.git /wp-login.php /backup.zip',cat:'Endpoint enumeration',sev:38,conf:60}};
 function audit(s,a){s.audit.unshift({t:new Date().toISOString(),a})}
 async function ingest(raw,s){
