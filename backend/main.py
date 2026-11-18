@@ -6,6 +6,7 @@ TODO: PostgreSQL with RLS, durable queue, encrypted object storage.
 """
 import hashlib
 from datetime import datetime, timezone
+from urllib.parse import unquote_plus
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -42,7 +43,9 @@ async def ingest(ev: EventIn, x_api_key: str | None = Header(default=None)):
     if any(e["event_id"] == ev.event_id for e in bucket):
         return {"status": "duplicate"}  # idempotent
     raw = ev.model_dump_json().encode()
-    p = ev.path.lower()
+    # Normalize before matching: percent-encoded payloads must be decoded, or
+    # "%27 OR %271%27%3D%271" never matches a signature.
+    p = unquote_plus(ev.path).lower()
     sev, conf, cat = (72, 55, "SQL injection") if "' or " in p else (55, 70, "XSS") if "<script" in p else (10, 20, "Unclassified")
     bucket.insert(0, {
         "event_id": ev.event_id, "asset": ev.asset, "category": cat,
