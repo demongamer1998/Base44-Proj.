@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SentinelPulse — SOC Command Center</title>
+<style>
+:root{--bg:#0f1b2d;--panel:#16263d;--ink:#e6edf5;--mute:#8aa0ba;--acc:#1aa386;--line:#24385a}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+h1{margin:0;font-size:20px;letter-spacing:.08em}h1 span{color:var(--acc)}h2{font-size:15px;margin:0 0 10px}
+main{padding:24px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.p{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}.wide{grid-column:1/-1}
+.k{display:flex;gap:12px;flex-wrap:wrap}.k div{flex:1;min-width:90px}.k b{display:block;font-size:24px}
+.m{color:var(--mute)}button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:8px 12px;cursor:pointer;margin:0 6px 6px 0}
+button.s{background:#2b3f61}select{background:#0f1b2d;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mute);font-weight:600}code{font-size:11px;word-break:break-all}
+.tag{padding:1px 8px;border-radius:10px;font-size:12px;color:#06121f}
+.Informational{background:#8aa0ba}.Low{background:#6cc3f5}.Medium{background:#f2c94c}.High{background:#f2994a}.Critical{background:#eb5757}
+.healthy{background:#27ae60}.degraded{background:#f2c94c}.unknown{background:#8aa0ba}.ok{color:#27ae60}.bad{color:#eb5757}
+</style>
+</head>
+<body>
+<header><h1>SENTINEL<span>PULSE</span> · SOC Command Center</h1>
+<div class="m">Tenant: <b>acme-demo</b> · Asset mode: <span class="tag healthy">detection-only</span> · Demo data stays in this browser</div></header>
+<main>
+<section class="p"><h2>Overview</h2>
+<div class="k"><div><b id="kEv">0</b><span class="m">events</span></div><div><b id="kInc">0</b><span class="m">incidents</span></div><div><b id="kBad">0</b><span class="m">integrity failures</span></div></div></section>
+
+<section class="p"><h2>Telemetry health</h2>
+<table id="health"></table>
+<p class="m">Missing telemetry is never read as "no attack". Silent sources show degraded or unknown.</p></section>
+
+<section class="p"><h2>Controlled test event (authorized asset)</h2>
+<p class="m">Runs the sprint path: validate → normalize → preserve original → SHA-256 → detect → display.</p>
+<select id="kind"><option value="sqli">SQL injection probe</option><option value="xss">XSS probe</option><option value="enum">Endpoint enumeration</option><option value="bad">Invalid event (quarantine)</option></select>
+<button id="send">Send test event</button><button class="s" id="dup">Resend last (duplicate)</button><button class="s" id="tamper">Tamper last original</button><button class="s" id="verify">Verify all</button><button class="s" id="clear">Reset</button>
+<div id="msg" class="m"></div></section>
+
+<section class="p wide"><h2>Live feed</h2>
+<table><thead><tr><th>Time (UTC)</th><th>Asset</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Mitigation</th><th>Evidence SHA-256</th><th>Integrity</th></tr></thead><tbody id="feed"></tbody></table></section>
+
+<section class="p wide"><h2>Evidence chain-of-custody</h2><table><tbody id="audit"></tbody></table></section>
+</main>
+<script>
+const KEY='sentinelpulse.v1';
+const load=()=>JSON.parse(localStorage.getItem(KEY)||'{"events":[],"audit":[],"quarantine":0}');
+const save=s=>localStorage.setItem(KEY,JSON.stringify(s));
+const sev=n=>n<20?'Informational':n<40?'Low':n<60?'Medium':n<80?'High':'Critical';
+const hex=async t=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const samples={sqli:{path:"/login?id=1' OR '1'='1",cat:'SQL injection',sev:72,conf:55},
+ xss:{path:'/search?q=<script>alert(1)<\/script>',cat:'XSS',sev:55,conf:70},
+ enum:{path:'/admin /.git /wp-login.php /backup.zip',cat:'Endpoint enumeration',sev:38,conf:60}};
+function audit(s,a){s.audit.unshift({t:new Date().toISOString(),a})}
+async function ingest(raw,s){
+  let o;try{o=JSON.parse(raw)}catch{o=null}
+  if(!o||!o.asset||!o.event_id||!o.path){s.quarantine++;audit(s,'Invalid event quarantined');return 'Quarantined: schema validation failed.'}
+  if(s.events.some(e=>e.event_id===o.event_id)){audit(s,'Duplicate delivery ignored: '+o.event_id);return 'Duplicate ignored (idempotent); delivery audited.'}
+  const d=sample(o);
+  s.events.unshift({event_id:o.event_id,asset:o.asset,source:'test-injector',received:new Date().toISOString(),original:raw,sha256:await hex(raw),
+    category:d.cat,severity:d.sev,confidence:d.conf,mitigation:'none (detection-only)',ok:true});
+  audit(s,'Original preserved + hashed: '+o.event_id);return 'Event accepted, preserved and hashed.'}
+function sample(o){return Object.values(samples).find(x=>x.path===o.path)||{cat:'Unclassified',sev:10,conf:20}}
+function build(k){if(k==='bad')return '{"oops":true';const x=samples[k];return JSON.stringify({event_id:'evt-'+Date.now(),asset:'test.acme.example',path:x.path,observed_at:new Date().toISOString()})}
+let lastRaw=null;
+async function verify(s){let bad=0;for(const e of s.events){e.ok=(await hex(e.original))===e.sha256;if(!e.ok){bad++;audit(s,'HASH MISMATCH: '+e.event_id)}}return bad}
+async function render(){
+  const s=load(),h=Date.now(),latest=s.events[0]&&Date.parse(s.events[0].received);
+  const cf=!latest?['unknown','No data received yet']:(h-latest>3e5?['degraded','Last delivery >5 min ago']:['healthy','Delivering']);
+  $('health').innerHTML=`<tr><td>Cloudflare Logpush</td><td><span class="tag ${cf[0]}">${cf[0]}</span></td><td class="m">${cf[1]}</td></tr><tr><td>Linux agent</td><td><span class="tag unknown">unknown</span></td><td class="m">No agent enrolled</td></tr>`;
+  $('kEv').textContent=s.events.length;$('kInc').textContent=s.events.filter(e=>e.severity>=40).length;$('kBad').textContent=s.events.filter(e=>!e.ok).length;
+  $('feed').innerHTML=s.events.map(e=>`<tr><td>${esc(e.received.slice(11,19))}</td><td>${esc(e.asset)}</td><td>${esc(e.category)}</td><td><span class="tag ${sev(e.severity)}">${sev(e.severity)} ${e.severity}</span></td><td>${e.confidence}%</td><td>${esc(e.mitigation)}</td><td><code>${e.sha256.slice(0,16)}…</code></td><td class="${e.ok?'ok':'bad'}">${e.ok?'verified':'MISMATCH'}</td></tr>`).join('')||'<tr><td colspan="8" class="m">No events yet.</td></tr>';
+  $('audit').innerHTML=s.audit.slice(0,12).map(a=>`<tr><td class="m">${a.t}</td><td>${esc(a.a)}</td></tr>`).join('')}
+$('send').onclick=async()=>{const s=load();lastRaw=build($('kind').value);$('msg').textContent=await ingest(lastRaw,s);save(s);render()};
+$('dup').onclick=async()=>{if(!lastRaw){$('msg').textContent='Send an event first.';return}const s=load();$('msg').textContent=await ingest(lastRaw,s);save(s);render()};
+$('tamper').onclick=()=>{const s=load();if(!s.events[0]){$('msg').textContent='No event to tamper.';return}s.events[0].original+=' ';audit(s,'Original modified (simulated)');save(s);$('msg').textContent='Original altered. Run Verify all.';render()};
+$('verify').onclick=async()=>{const s=load(),b=await verify(s);save(s);$('msg').textContent=b?b+' integrity failure(s) detected.':'All preserved originals match their SHA-256.';render()};
+$('clear').onclick=()=>{localStorage.removeItem(KEY);lastRaw=null;$('msg').textContent='';render()};
+render();
+</script>
+</body>
+</html>
